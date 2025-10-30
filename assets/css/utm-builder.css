@@ -1,0 +1,53 @@
+.utm-builder-container {
+	margin-top: 12px;
+}
+
+.utm-builder-toggle.button-active {
+	background-color: #0073aa;
+	border-color: #00639b;
+	color: #fff;
+}
+
+.utm-builder-fields {
+	display: none;
+	margin-top: 10px;
+	padding: 10px 12px;
+	background-color: #f8f9fb;
+}
+
+.utm-builder-field {
+	margin-bottom: 8px;
+}
+
+.utm-builder-field label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.utm-builder-field input {
+	width: 100%;
+	max-width: 340px;
+	padding: 4px 6px;
+	box-sizing: border-box;
+}
+
+.utm-builder-required {
+	color: #d63638;
+	margin-left: 4px;
+	font-weight: 600;
+}
+
+.utm-builder-error input {
+	border-color: #d63638;
+}
+
+.utm-builder-help {
+	margin-bottom: 10px;
+	color: #555;
+	font-size: 0.9em;
+}
+
+.edit-row .utm-builder-container {
+	margin-top: 16px;
+}
