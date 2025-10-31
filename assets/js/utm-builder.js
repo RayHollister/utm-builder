@@ -119,9 +119,8 @@
 		const $wrapper = $( '<div class="utm-builder-container" data-enabled="0"></div>' );
 		const $toggle  = $( '<button type="button" class="button secondary utm-builder-toggle" aria-expanded="false">Build UTM?</button>' );
 		const $fields  = $( '<div class="utm-builder-fields" aria-hidden="true"></div>' );
-		const $help    = $( '<div class="utm-builder-help">Source, Medium, and Campaign are required. Term and Content are optional.</div>' );
+		const $help    = $( '<div class="utm-builder-help" aria-hidden="true">Source, Medium, and Campaign are required. Term and Content are optional.</div>' );
 
-		$fields.append( $help );
 
 		FIELD_DEFS.forEach( field => {
 			const inputId = prefix + '-' + field.key;
@@ -144,7 +143,7 @@
 			$fields.append( $fieldWrapper );
 		} );
 
-		$wrapper.append( $toggle ).append( $fields );
+		$wrapper.append( $toggle ).append( $fields ).append( $help );
 		$host.append( $wrapper );
 
 		const formInstance = {
@@ -153,6 +152,7 @@
 			wrapper: $wrapper,
 			toggle: $toggle,
 			fields: $fields,
+			help: $help,
 			urlSelector: urlInput,
 			isEnabled() {
 				return $wrapper.attr( 'data-enabled' ) === '1';
@@ -161,35 +161,40 @@
 				return $( this.urlSelector );
 			},
 			setEnabled( enabled, options ) {
-				const opts = options || {};
-				const silent = Boolean( opts.silent );
-				const skipPrefill = Boolean( opts.skipPrefill );
+			const opts = options || {};
+			const silent = Boolean( opts.silent );
+			const skipPrefill = Boolean( opts.skipPrefill );
 
-				$wrapper.attr( 'data-enabled', enabled ? '1' : '0' );
-				$toggle.toggleClass( 'button-active', enabled );
-				$toggle.attr( 'aria-expanded', enabled ? 'true' : 'false' );
-				$fields.attr( 'aria-hidden', enabled ? 'false' : 'true' );
-				this.clearErrors();
+			$wrapper.attr( 'data-enabled', enabled ? '1' : '0' );
+			$toggle.toggleClass( 'button-active', enabled );
+			$toggle.attr( 'aria-expanded', enabled ? 'true' : 'false' );
+			$fields.attr( 'aria-hidden', enabled ? 'false' : 'true' );
+			$help.attr( 'aria-hidden', enabled ? 'false' : 'true' );
+			this.clearErrors();
 
-				if ( enabled ) {
-					$toggle.text( 'Hide UTM Builder' );
-					if ( !skipPrefill ) {
-						this.syncFromUrl();
-					}
-					if ( silent ) {
-						$fields.show();
-					} else {
-						$fields.stop( true, true ).slideDown( 150 );
-					}
-				} else {
-					$toggle.text( 'Build UTM?' );
-					if ( silent ) {
-						$fields.hide();
-					} else {
-						$fields.stop( true, true ).slideUp( 150 );
-					}
+			if ( enabled ) {
+				$toggle.text( 'Hide UTM Builder' );
+				if ( !skipPrefill ) {
+					this.syncFromUrl();
 				}
-			},
+				if ( silent ) {
+					$fields.show();
+					$help.show();
+				} else {
+					$fields.stop( true, true ).slideDown( 150 );
+					$help.stop( true, true ).slideDown( 150 );
+				}
+			} else {
+				$toggle.text( 'Build UTM?' );
+				if ( silent ) {
+					$fields.hide();
+					$help.hide();
+				} else {
+					$fields.stop( true, true ).slideUp( 150 );
+					$help.stop( true, true ).slideUp( 150 );
+				}
+			}
+		},
 			getValues() {
 				const values = {};
 				$fields.find( 'input[data-utm-field]' ).each( function () {

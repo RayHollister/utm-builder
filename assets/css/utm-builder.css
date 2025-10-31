@@ -12,11 +12,21 @@
 	display: none;
 	margin-top: 10px;
 	padding: 10px 12px;
+	border: 1px solid #dcdcdc;
 	background-color: #f8f9fb;
+	border-radius: 4px;
+	white-space: nowrap;
+	overflow-x: auto;
 }
 
 .utm-builder-field {
-	margin-bottom: 8px;
+	display: inline-block;
+	margin: 0 12px 0 0;
+	vertical-align: bottom;
+}
+
+.utm-builder-field:last-child {
+	margin-right: 0;
 }
 
 .utm-builder-field label {
@@ -26,10 +36,13 @@
 }
 
 .utm-builder-field input {
-	width: 100%;
-	max-width: 340px;
+	/* width: 220px; */
+	max-width: none;
 	padding: 4px 6px;
 	box-sizing: border-box;
+	-webkit-border-radius: 0px;
+  border-radius: 0px;
+	border: 1px solid #88c0eb;
 }
 
 .utm-builder-required {
@@ -43,7 +56,8 @@
 }
 
 .utm-builder-help {
-	margin-bottom: 10px;
+	display: none;
+	margin-top: 8px;
 	color: #555;
 	font-size: 0.9em;
 }
