@@ -121,12 +121,38 @@
 		const $fields  = $( '<div class="utm-builder-fields" aria-hidden="true"></div>' );
 		const $help    = $( '<div class="utm-builder-help" aria-hidden="true">Source, Medium, and Campaign are required. Term and Content are optional.</div>' );
 
+		const initFloatingState = ( $input, $inner ) => {
+			const syncState = () => {
+				const hasValue = trimValue( $input.val() ) !== '';
+				if ( hasValue ) {
+					$inner.addClass( 'is-active' );
+				} else if ( !$inner.hasClass( 'is-focused' ) ) {
+					$inner.removeClass( 'is-active' );
+				}
+			};
+
+			$input.on( 'focus', () => {
+				$inner.addClass( 'is-focused is-active' );
+			} );
+
+			$input.on( 'blur', () => {
+				$inner.removeClass( 'is-focused' );
+				syncState();
+			} );
+
+			$input.on( 'input change', syncState );
+
+			syncState();
+			$input.data( 'utmFloatingSync', syncState );
+		};
+
 
 		FIELD_DEFS.forEach( field => {
 			const inputId = prefix + '-' + field.key;
 			const $fieldWrapper = $( '<div class="utm-builder-field"></div>' );
-			const $label = $( '<label></label>' );
-			const $input = $( '<input type="text" autocomplete="off" />' );
+			const $inner = $( '<div class="utm-field-inner"></div>' );
+			const $input = $( '<input type="text" autocomplete="off" class="utm-input" />' );
+			const $label = $( '<label class="utm-floating-label"></label>' );
 
 			$label.attr( 'for', inputId ).text( field.label );
 			if ( field.required ) {
@@ -137,10 +163,13 @@
 			$input
 				.attr( 'id', inputId )
 				.attr( 'data-utm-field', field.key )
-				.attr( 'placeholder', field.label );
+				.attr( 'placeholder', ' ' );
 
-			$fieldWrapper.append( $label ).append( $input );
+			$inner.append( $input ).append( $label );
+			$fieldWrapper.append( $inner );
 			$fields.append( $fieldWrapper );
+
+			initFloatingState( $input, $inner );
 		} );
 
 		$wrapper.append( $toggle ).append( $fields ).append( $help );
@@ -208,7 +237,12 @@
 				$fields.find( 'input[data-utm-field]' ).each( function () {
 					const $input = $( this );
 					const key = $input.data( 'utmField' );
-					$input.val( data[ key ] || '' );
+					const value = data[ key ] || '';
+					$input.val( value );
+					const sync = $input.data( 'utmFloatingSync' );
+					if ( typeof sync === 'function' ) {
+						sync();
+					}
 				} );
 			},
 			clearErrors() {
@@ -286,6 +320,10 @@
 			const $input = $( this );
 			$input.removeAttr( 'aria-invalid' );
 			$input.closest( '.utm-builder-field' ).removeClass( 'utm-builder-error' );
+			const sync = $input.data( 'utmFloatingSync' );
+			if ( typeof sync === 'function' ) {
+				sync();
+			}
 		} );
 
 		$toggle.on( 'click', () => {
