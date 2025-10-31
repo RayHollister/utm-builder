@@ -119,7 +119,7 @@
 		const $wrapper = $( '<div class="utm-builder-container" data-enabled="0"></div>' );
 		const $toggle  = $( '<button type="button" class="button secondary utm-builder-toggle" aria-expanded="false">Build UTM?</button>' );
 		const $fields  = $( '<div class="utm-builder-fields" aria-hidden="true"></div>' );
-		const $help    = $( '<div class="utm-builder-help" aria-hidden="true">Source, Medium, and Campaign are required. Term and Content are optional.</div>' );
+		const $help    = $( '<div class="utm-builder-help" aria-hidden="true">Source, Medium and Campaign are required. Term and Content are optional.</div>' );
 
 		const initFloatingState = ( $input, $inner ) => {
 			const syncState = () => {
@@ -190,40 +190,49 @@
 				return $( this.urlSelector );
 			},
 			setEnabled( enabled, options ) {
-			const opts = options || {};
-			const silent = Boolean( opts.silent );
-			const skipPrefill = Boolean( opts.skipPrefill );
+				const opts = options || {};
+				const silent = Boolean( opts.silent );
+				const skipPrefill = Boolean( opts.skipPrefill );
 
-			$wrapper.attr( 'data-enabled', enabled ? '1' : '0' );
-			$toggle.toggleClass( 'button-active', enabled );
-			$toggle.attr( 'aria-expanded', enabled ? 'true' : 'false' );
-			$fields.attr( 'aria-hidden', enabled ? 'false' : 'true' );
-			$help.attr( 'aria-hidden', enabled ? 'false' : 'true' );
-			this.clearErrors();
+				$wrapper.attr( 'data-enabled', enabled ? '1' : '0' );
+				$toggle.toggleClass( 'button-active', enabled );
+				$toggle.attr( 'aria-expanded', enabled ? 'true' : 'false' );
+				$fields.attr( 'aria-hidden', enabled ? 'false' : 'true' );
+				$help.attr( 'aria-hidden', enabled ? 'false' : 'true' );
+				this.clearErrors();
 
-			if ( enabled ) {
-				$toggle.text( 'Hide UTM Builder' );
-				if ( !skipPrefill ) {
-					this.syncFromUrl();
-				}
-				if ( silent ) {
-					$fields.show();
-					$help.show();
+				if ( enabled ) {
+					$toggle.text( 'Hide UTM Builder' );
+					if ( !skipPrefill ) {
+						this.syncFromUrl();
+					}
+
+					if ( silent ) {
+						$fields.stop( true, true ).css( 'display', 'flex' );
+						$help.stop( true, true ).show();
+					} else {
+						$fields
+							.stop( true, true )
+							.css( 'display', 'flex' )
+							.hide()
+							.slideDown( 150 );
+						$help.stop( true, true ).slideDown( 150 );
+					}
 				} else {
-					$fields.stop( true, true ).slideDown( 150 );
-					$help.stop( true, true ).slideDown( 150 );
+					$toggle.text( 'Build UTM?' );
+					if ( silent ) {
+						$fields.stop( true, true ).css( 'display', 'none' );
+						$help.stop( true, true ).hide();
+					} else {
+						$fields
+							.stop( true, true )
+							.slideUp( 150, () => {
+								$fields.css( 'display', 'none' );
+							} );
+						$help.stop( true, true ).slideUp( 150 );
+					}
 				}
-			} else {
-				$toggle.text( 'Build UTM?' );
-				if ( silent ) {
-					$fields.hide();
-					$help.hide();
-				} else {
-					$fields.stop( true, true ).slideUp( 150 );
-					$help.stop( true, true ).slideUp( 150 );
-				}
-			}
-		},
+			},
 			getValues() {
 				const values = {};
 				$fields.find( 'input[data-utm-field]' ).each( function () {
