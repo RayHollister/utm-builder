@@ -1,14 +1,44 @@
 .utm-builder-container {
-	margin-top: 12px;
+	/* margin-top: 12px; */
+}
+
+#new_url .utm-builder-container {
+    padding: 0px;
 }
 
 #new_url .utm-builder-container div {
-    padding: 4px 0px;
+    padding-top: 4px;
+}
+
+.utm-builder-toggle {
+	font-family: Verdana, Arial, sans-serif;
+	font-size: 10px;
+	font-weight: bold;
+	color: #595441;
+	background-color: #fff;
+	border: 1px solid #88c0eb;
+	border-radius: 3px;
+	padding: 1px 12px;
+	cursor: pointer;
+	transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.utm-builder-toggle:hover,
+.utm-builder-toggle:focus {
+	background-color: #f4fbff;
+	outline: none;
 }
 
 .utm-builder-toggle.button-active {
 	background-color: #0073aa;
 	border-color: #00639b;
+	color: #fff;
+}
+
+.utm-builder-toggle.button-active:hover,
+.utm-builder-toggle.button-active:focus {
+	background-color: #005f8d;
+	border-color: #00547d;
 	color: #fff;
 }
 
@@ -71,16 +101,12 @@
 	font-size: 0.9em;
 }
 
-.utm-builder-submit-row {
-	margin-top: 14px;
-}
-
 .utm-builder-submit-button {
 	display: inline-block;
 }
 
 .edit-row .utm-builder-container {
-	margin-top: 16px;
+	/* margin-top: 16px; */
 }
 
 .utm-field-inner {
