@@ -12,6 +12,10 @@
 	color: #fff;
 }
 
+#new_url_form .utm-builder-toggle {
+	margin-left: 12px;
+}
+
 .utm-builder-fields {
     display: none;
     margin-top: 10px;
@@ -65,6 +69,14 @@
 	display: none;
 	color: #555;
 	font-size: 0.9em;
+}
+
+.utm-builder-submit-row {
+	margin-top: 14px;
+}
+
+.utm-builder-submit-button {
+	display: inline-block;
 }
 
 .edit-row .utm-builder-container {

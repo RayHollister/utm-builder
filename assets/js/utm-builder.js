@@ -336,6 +336,25 @@
 				this.metaPayload = createMetaPayload( false );
 				this.setEnabled( false, { silent: true, skipPrefill: true } );
 			},
+			positionAddButton( $button ) {
+				const $addButton = $button && $button.jquery ? $button : $( $button );
+				if ( !$addButton.length ) {
+					return;
+				}
+
+				const $nonce = $addButton.siblings( '#nonce-add' );
+				if ( $nonce.length ) {
+					this.toggle.insertBefore( $nonce );
+				} else {
+					this.toggle.insertBefore( $addButton );
+				}
+
+				const $target = this.help.length ? this.help : this.fields;
+				const $submitRow = $( '<div class="utm-builder-submit-row"></div>' );
+				$submitRow.insertAfter( $target );
+				$submitRow.append( $addButton );
+				$addButton.addClass( 'utm-builder-submit-button' );
+			},
 			applyUtms() {
 				if ( !this.isEnabled() ) {
 					this.metaPayload = createMetaPayload( false );
@@ -440,6 +459,13 @@
 				urlInput: '#add-url',
 				context: 'new',
 			} );
+
+			if ( this.newForm ) {
+				const $addButton = $form.find( '#add-button' );
+				if ( $addButton.length ) {
+					this.newForm.positionAddButton( $addButton );
+				}
+			}
 		},
 		observeEditRows() {
 			const tableBody = document.querySelector( '#main_table tbody' );
