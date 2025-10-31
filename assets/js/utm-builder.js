@@ -87,6 +87,51 @@
 	}
 
 	/**
+	 * Remove known UTM parameters from a URL string.
+	 *
+	 * @param {string} url URL to cleanse.
+	 * @return {string|null} URL without UTM params or null if invalid.
+	 */
+	function stripUtmParams( url ) {
+		const urlObject = getUrlObject( url );
+		if ( !urlObject ) {
+			return null;
+		}
+
+		FIELD_DEFS.forEach( field => {
+			urlObject.searchParams.delete( field.key );
+		} );
+
+		return urlObject.toString();
+	}
+
+	/**
+	 * Build a metadata payload to send alongside requests.
+	 *
+	 * @param {boolean} enabled      Whether the builder is enabled.
+	 * @param {string}  originalUrl  Base URL without UTM params.
+	 * @param {Object}  values       UTM key/value map.
+	 * @return {Object} Payload for AJAX requests.
+	 */
+	function createMetaPayload( enabled, originalUrl, values ) {
+		const payload = {
+			utm_builder_meta_enabled: enabled ? '1' : '0',
+		};
+
+		if ( enabled ) {
+			const utmValues = values || {};
+			payload.utm_builder_original_url = trimValue( originalUrl || '' );
+			FIELD_DEFS.forEach( field => {
+				const key = 'utm_builder_' + field.key;
+				const hasKey = Object.prototype.hasOwnProperty.call( utmValues, field.key );
+				payload[ key ] = trimValue( hasKey ? utmValues[ field.key ] : '' );
+			} );
+		}
+
+		return payload;
+	}
+
+	/**
 	 * Display an error using YOURLS notify bar if available.
 	 *
 	 * @param {string} message Message to display.
@@ -183,6 +228,7 @@
 			fields: $fields,
 			help: $help,
 			urlSelector: urlInput,
+			metaPayload: createMetaPayload( false ),
 			isEnabled() {
 				return $wrapper.attr( 'data-enabled' ) === '1';
 			},
@@ -200,6 +246,10 @@
 				$fields.attr( 'aria-hidden', enabled ? 'false' : 'true' );
 				$help.attr( 'aria-hidden', enabled ? 'false' : 'true' );
 				this.clearErrors();
+
+				if ( !enabled ) {
+					this.metaPayload = createMetaPayload( false );
+				}
 
 				if ( enabled ) {
 					$toggle.text( 'Hide UTM Builder' );
@@ -241,6 +291,10 @@
 				} );
 				return values;
 			},
+			getMetaRequestParams() {
+				const payload = this.metaPayload || createMetaPayload( false );
+				return Object.assign( {}, payload );
+			},
 			setValues( values ) {
 				const data = values || {};
 				$fields.find( 'input[data-utm-field]' ).each( function () {
@@ -279,25 +333,38 @@
 			reset() {
 				this.setValues( {} );
 				this.clearErrors();
+				this.metaPayload = createMetaPayload( false );
 				this.setEnabled( false, { silent: true, skipPrefill: true } );
 			},
 			applyUtms() {
 				if ( !this.isEnabled() ) {
+					this.metaPayload = createMetaPayload( false );
 					return true;
 				}
 
 				const $urlInput = this.getUrlInput();
 				if ( !$urlInput.length ) {
+					this.metaPayload = createMetaPayload( false );
 					return true;
 				}
 
-				const baseUrl = trimValue( $urlInput.val() );
-				if ( !baseUrl ) {
+				const rawUrl = trimValue( $urlInput.val() );
+				if ( !rawUrl ) {
 					showError( 'Enter a destination URL before building UTMs.' );
 					$urlInput.focus();
+					this.metaPayload = createMetaPayload( false );
 					return false;
 				}
 
+				const parsedUrl = getUrlObject( rawUrl );
+				if ( !parsedUrl ) {
+					showError( 'The destination URL is invalid. Please check and try again.' );
+					$urlInput.focus();
+					this.metaPayload = createMetaPayload( false );
+					return false;
+				}
+
+				const baseUrl = stripUtmParams( parsedUrl.toString() ) || parsedUrl.toString();
 				const values = this.getValues();
 				const missing = REQUIRED_KEYS.filter( key => !trimValue( values[ key ] ) );
 
@@ -310,6 +377,7 @@
 					if ( $firstInput.length ) {
 						$firstInput.focus();
 					}
+					this.metaPayload = createMetaPayload( false );
 					return false;
 				}
 
@@ -317,10 +385,12 @@
 				if ( !updatedUrl ) {
 					showError( 'The destination URL is invalid. Please check and try again.' );
 					$urlInput.focus();
+					this.metaPayload = createMetaPayload( false );
 					return false;
 				}
 
 				$urlInput.val( updatedUrl );
+				this.metaPayload = createMetaPayload( true, baseUrl, values );
 				return true;
 			},
 		};
@@ -451,16 +521,15 @@
 			}
 		},
 		overrideAddLink() {
-			if ( !this.originalAddLink ) {
+			const self = this;
+			if ( typeof this.originalAddLink !== 'function' ) {
 				return;
 			}
-			const original = this.originalAddLink;
-			const self = this;
 			window.add_link = function () {
-				if ( !self.newForm || self.newForm.applyUtms() ) {
-					return original.apply( this, arguments );
+				if ( self.newForm && !self.newForm.applyUtms() ) {
+					return false;
 				}
-				return false;
+				return self.originalAddLink.apply( this, arguments );
 			};
 		},
 		overrideAddLinkReset() {
@@ -478,23 +547,117 @@
 			};
 		},
 		overrideEditLinkSave() {
-			if ( !this.originalEditLinkSave ) {
+			if ( typeof this.originalEditLinkSave !== 'function' ) {
 				return;
 			}
-			const original = this.originalEditLinkSave;
 			const self = this;
 			window.edit_link_save = function ( id ) {
 				const form = self.editForms[ id ];
-				if ( !form || form.applyUtms() ) {
-					return original.apply( this, arguments );
+
+				if ( form ) {
+					if ( !form.applyUtms() ) {
+						return false;
+					}
 				}
-				return false;
+
+				return self.originalEditLinkSave.apply( this, arguments );
 			};
+		},
+		setupAjaxMetaInjection() {
+			const self = this;
+
+			const normalizeUrl = url => {
+				if ( !url ) {
+					return null;
+				}
+				let parsed = getUrlObject( url );
+				if ( parsed ) {
+					return parsed;
+				}
+				try {
+					return new URL( url, window.location.href );
+				} catch ( error ) {
+					return null;
+				}
+			};
+
+			const applyPayloadToSettings = ( settings, payload ) => {
+				if ( !payload ) {
+					return;
+				}
+				const method = ( settings.type || settings.method || 'GET' ).toUpperCase();
+				const isGetLike = method === 'GET' || method === 'HEAD';
+
+				if ( isGetLike ) {
+					const urlObject = normalizeUrl( settings.url );
+					if ( !urlObject ) {
+						return;
+					}
+					Object.entries( payload ).forEach( ( [ key, value ] ) => {
+						if ( typeof value === 'undefined' || value === null ) {
+							return;
+						}
+						urlObject.searchParams.set( key, value );
+					} );
+					settings.url = urlObject.toString();
+				} else {
+					const params = new URLSearchParams( settings.data || '' );
+					Object.entries( payload ).forEach( ( [ key, value ] ) => {
+						if ( typeof value === 'undefined' || value === null ) {
+							return;
+						}
+						params.set( key, value );
+					} );
+					settings.data = params.toString();
+				}
+			};
+
+			$( document ).on( 'ajaxSend', ( event, jqXHR, settings ) => {
+				if ( !settings ) {
+					return;
+				}
+
+				const urlObject = normalizeUrl( settings.url );
+				let action = urlObject ? urlObject.searchParams.get( 'action' ) : null;
+
+				if ( !action && settings.data ) {
+					try {
+						const dataParams = new URLSearchParams( settings.data );
+						action = dataParams.get( 'action' );
+					} catch ( error ) {
+						action = null;
+					}
+				}
+
+				if ( action === 'add' && self.newForm ) {
+					const payload = self.newForm.getMetaRequestParams();
+					applyPayloadToSettings( settings, payload );
+				} else if ( action === 'edit_save' ) {
+					let targetId = null;
+					if ( urlObject ) {
+						targetId = urlObject.searchParams.get( 'id' );
+					}
+					if ( !targetId && settings.data ) {
+						try {
+							const dataParams = new URLSearchParams( settings.data );
+							targetId = dataParams.get( 'id' );
+						} catch ( error ) {
+							targetId = null;
+						}
+					}
+					const form = targetId ? self.editForms[ targetId ] : null;
+					if ( form ) {
+						const payload = form.getMetaRequestParams();
+						applyPayloadToSettings( settings, payload );
+					}
+				}
+			} );
 		},
 	};
 
 	$( function () {
 		utmBuilder.init();
+		utmBuilder.setupAjaxMetaInjection();
 	} );
 
 })( jQuery );

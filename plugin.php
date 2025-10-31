@@ -3,7 +3,7 @@
 Plugin Name: UTM Builder for YOURLS
 Plugin URI: https://github.com/rayhollister/utm-builder
 Description: Adds a guided UTM builder to the YOURLS admin interface.
-Version: 1.0.1
+Version: 1.1.0
 Author: Ray Hollister
 Author URI: https://rayhollister.com/
 */
@@ -12,6 +12,16 @@ Author URI: https://rayhollister.com/
 if ( !defined( 'YOURLS_ABSPATH' ) ) {
 	die();
 }
+
+define( 'UTM_BUILDER_PLUGIN_BASENAME', yourls_plugin_basename( __FILE__ ) );
+define( 'UTM_BUILDER_OPTION_SAVE_META', 'utm_builder_save_meta' );
+define( 'UTM_BUILDER_OPTION_DB_VERSION', 'utm_builder_meta_db_version' );
+define( 'UTM_BUILDER_DB_VERSION', '1.0.0' );
+define( 'UTM_BUILDER_META_TABLE', YOURLS_DB_PREFIX . 'url_meta' );
+define( 'UTM_BUILDER_LOG_FILE', YOURLS_USERDIR . '/utm-builder-debug.log' );
+
+yourls_add_action( 'activated_' . UTM_BUILDER_PLUGIN_BASENAME, 'utm_builder_activate' );
+yourls_add_action( 'plugins_loaded', 'utm_builder_bootstrap' );
 
 /**
  * Enqueue plugin assets on the admin index page.
@@ -30,10 +40,623 @@ function utm_builder_enqueue_assets( $context ) {
 	}
 
 	$plugin_url = yourls_plugin_url( __DIR__ );
-	$version    = '1.0.0';
+	$version    = '1.1.0';
 
 	echo '<link rel="stylesheet" href="' . $plugin_url . '/assets/css/utm-builder.css?v=' . $version . '" type="text/css" media="all" />' . "\n";
 	echo '<script src="' . $plugin_url . '/assets/js/utm-builder.js?v=' . $version . '"></script>' . "\n";
 }
 
 yourls_add_action( 'html_head', 'utm_builder_enqueue_assets' );
+
+/**
+ * Write a debug line to the plugin log file.
+ *
+ * @param mixed  $message Debug message.
+ * @param string $context Context label.
+ *
+ * @return void
+ */
+function utm_builder_log( $message, $context = 'debug' ) {
+	if ( !defined( 'UTM_BUILDER_LOG_FILE' ) ) {
+		return;
+	}
+
+	$log_line = '[' . date( 'c' ) . '] [' . $context . '] ';
+	if ( is_scalar( $message ) || ( is_object( $message ) && method_exists( $message, '__toString' ) ) ) {
+		$log_line .= (string) $message;
+	} else {
+		$log_line .= var_export( $message, true );
+	}
+
+	$log_line .= "\n";
+	@file_put_contents( UTM_BUILDER_LOG_FILE, $log_line, FILE_APPEND );
+}
+
+/**
+ * Plugin activation callback.
+ *
+ * @return void
+ */
+function utm_builder_activate() {
+	utm_builder_ensure_default_options();
+
+	if ( utm_builder_is_meta_enabled() ) {
+		utm_builder_maybe_install_table();
+	}
+}
+
+/**
+ * Bootstrap plugin hooks once plugins are loaded.
+ *
+ * @return void
+ */
+function utm_builder_bootstrap() {
+	utm_builder_ensure_default_options();
+
+	yourls_register_plugin_page( 'utm_builder_settings', 'UTM Builder Settings', 'utm_builder_render_settings_page' );
+
+yourls_add_action( 'insert_link', 'utm_builder_handle_insert', 20, 1 );
+yourls_add_filter( 'edit_link', 'utm_builder_handle_edit', 20, 7 );
+yourls_add_action( 'delete_link', 'utm_builder_handle_delete', 20, 1 );
+
+	if ( utm_builder_is_meta_enabled() ) {
+		utm_builder_maybe_install_table();
+	}
+}
+
+/**
+ * Ensure default plugin options exist.
+ *
+ * @return void
+ */
+function utm_builder_ensure_default_options() {
+	$current = yourls_get_option( UTM_BUILDER_OPTION_SAVE_META, null );
+	if ( null === $current ) {
+		yourls_update_option( UTM_BUILDER_OPTION_SAVE_META, '1' );
+	}
+}
+
+/**
+ * Determine if metadata storage is enabled.
+ *
+ * @return bool
+ */
+function utm_builder_is_meta_enabled() {
+	return yourls_get_option( UTM_BUILDER_OPTION_SAVE_META, '1' ) === '1';
+}
+
+/**
+ * Return the table name used for metadata storage.
+ *
+ * @return string
+ */
+function utm_builder_get_meta_table() {
+	return UTM_BUILDER_META_TABLE;
+}
+
+/**
+ * Check if the meta table is ready for use.
+ *
+ * @return bool
+ */
+function utm_builder_can_use_table() {
+	return yourls_get_option( UTM_BUILDER_OPTION_DB_VERSION, '' ) === UTM_BUILDER_DB_VERSION;
+}
+
+/**
+ * Create or upgrade the metadata table if required.
+ *
+ * @return bool
+ */
+function utm_builder_maybe_install_table() {
+	if ( utm_builder_can_use_table() ) {
+		return true;
+	}
+
+	$table = utm_builder_get_meta_table();
+	$sql   = "CREATE TABLE IF NOT EXISTS `$table` (
+		`meta_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		`keyword` VARCHAR(100) NOT NULL,
+		`original_url` TEXT NOT NULL,
+		`utm_source` VARCHAR(255) DEFAULT NULL,
+		`utm_medium` VARCHAR(255) DEFAULT NULL,
+		`utm_campaign` VARCHAR(255) DEFAULT NULL,
+		`utm_term` VARCHAR(255) DEFAULT NULL,
+		`utm_content` VARCHAR(255) DEFAULT NULL,
+		`created_at` DATETIME NOT NULL,
+		`updated_at` DATETIME NOT NULL,
+		PRIMARY KEY (`meta_id`),
+		UNIQUE KEY `keyword_unique` (`keyword`)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+	try {
+		yourls_get_db()->query( $sql );
+		yourls_update_option( UTM_BUILDER_OPTION_DB_VERSION, UTM_BUILDER_DB_VERSION );
+		return true;
+	} catch ( \Exception $exception ) {
+		if ( function_exists( 'yourls_debug' ) ) {
+			yourls_debug( 'UTM Builder meta table error: ' . $exception->getMessage() );
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Render the plugin settings page.
+ *
+ * @return void
+ */
+function utm_builder_render_settings_page() {
+	$notice = '';
+
+	if ( isset( $_POST['utm_builder_settings_submit'] ) ) {
+		yourls_verify_nonce( 'utm_builder_settings' );
+
+		$enabled = isset( $_POST['utm_builder_meta_enabled'] ) ? '1' : '0';
+		yourls_update_option( UTM_BUILDER_OPTION_SAVE_META, $enabled );
+
+		if ( '1' === $enabled ) {
+			if ( utm_builder_maybe_install_table() ) {
+				$notice = 'Settings saved. Metadata storage is enabled.';
+			} else {
+				$notice = 'Settings saved, but the metadata table could not be created.';
+			}
+		} else {
+			$notice = 'Settings saved. Metadata storage is disabled.';
+		}
+	}
+
+	$enabled    = utm_builder_is_meta_enabled();
+	$table_name = utm_builder_get_meta_table();
+	$nonce      = yourls_create_nonce( 'utm_builder_settings' );
+	$checked    = $enabled ? ' checked="checked"' : '';
+
+	echo '<main class="utm-builder-settings">';
+	echo '<h2>UTM Builder Settings</h2>';
+
+	if ( $notice ) {
+		echo '<p class="message success">' . yourls_esc_html( $notice ) . '</p>';
+	}
+
+	echo '<form method="post">';
+	echo '<input type="hidden" name="nonce" value="' . yourls_esc_attr( $nonce ) . '" />';
+	echo '<input type="hidden" name="utm_builder_settings_submit" value="1" />';
+	echo '<p>';
+	echo '<label>';
+	echo '<input type="checkbox" name="utm_builder_meta_enabled" value="1"' . $checked . ' />';
+	echo ' Save original URLs and UTM parameters in the `' . yourls_esc_html( $table_name ) . '` table.';
+	echo '</label>';
+	echo '</p>';
+	echo '<p class="description">When enabled, UTM Builder requests store the base URL and UTM parameters for newly created or edited links.</p>';
+	echo '<p><input type="submit" class="button" value="Save Settings" /></p>';
+	echo '</form>';
+	echo '</main>';
+}
+
+/**
+ * Handle metadata persistence after inserting a link.
+ *
+ * @param bool   $success   Whether the insert succeeded.
+ * @param string $url       Long URL.
+ * @param string $keyword   Short keyword.
+ * @param string $title     Title.
+ * @param string $timestamp Timestamp.
+ * @param string $ip        IP address.
+ *
+ * @return void
+ */
+function utm_builder_handle_insert( $args ) {
+	$args = is_array( $args ) ? $args : array( $args );
+
+	list( $success, $url, $keyword, $title, $timestamp, $ip ) = array_pad( $args, 6, null );
+
+	$success = (bool) $success;
+	if ( is_array( $keyword ) ) {
+		$keyword = reset( $keyword );
+	}
+	$keyword = is_string( $keyword ) ? $keyword : '';
+
+	if ( !$success || !utm_builder_is_meta_enabled() ) {
+		return;
+	}
+
+	try {
+		$payload = utm_builder_get_meta_payload_from_request();
+		utm_builder_log(
+			array(
+				'action'  => 'insert',
+				'keyword' => $keyword,
+				'success' => $success,
+				'payload' => $payload,
+				'request' => array_intersect_key(
+					$_REQUEST,
+					array_flip(
+						array(
+							'utm_builder_meta_enabled',
+							'utm_builder_original_url',
+							'utm_builder_utm_source',
+							'utm_builder_utm_medium',
+							'utm_builder_utm_campaign',
+							'utm_builder_utm_term',
+							'utm_builder_utm_content',
+						)
+					)
+				),
+			),
+			'insert_start'
+		);
+		utm_builder_apply_meta_payload( $keyword, $payload );
+	} catch ( \Throwable $exception ) {
+		utm_builder_log( 'Insert error: ' . $exception->getMessage(), 'error' );
+	}
+}
+
+/**
+ * Handle metadata updates when editing a link.
+ *
+ * @param array  $result               Result array from edit operation.
+ * @param string $url                  Long URL.
+ * @param string $keyword              Original keyword.
+ * @param string $newkeyword           Updated keyword.
+ * @param string $title                Title.
+ * @param bool   $new_url_already_there Whether the URL already existed.
+ * @param bool   $keyword_is_ok        Whether keyword validation passed.
+ *
+ * @return array
+ */
+function utm_builder_handle_edit( $result, $url, $keyword, $newkeyword, $title, $new_url_already_there, $keyword_is_ok ) {
+	if ( !utm_builder_is_meta_enabled() ) {
+		return $result;
+	}
+
+	if ( !is_array( $result ) || ( $result['status'] ?? '' ) !== 'success' ) {
+		return $result;
+	}
+
+	try {
+		$payload        = utm_builder_get_meta_payload_from_request();
+		$target_keyword = $result['url']['keyword'] ?? $newkeyword ?? $keyword;
+
+		utm_builder_log(
+			array(
+				'action'  => 'edit',
+				'keyword' => $target_keyword,
+				'source'  => $keyword,
+				'payload' => $payload,
+				'request' => array_intersect_key(
+					$_REQUEST,
+					array_flip(
+						array(
+							'utm_builder_meta_enabled',
+							'utm_builder_original_url',
+							'utm_builder_utm_source',
+							'utm_builder_utm_medium',
+							'utm_builder_utm_campaign',
+							'utm_builder_utm_term',
+							'utm_builder_utm_content',
+						)
+					)
+				),
+			),
+			'edit_start'
+		);
+
+		utm_builder_apply_meta_payload( $target_keyword, $payload, $keyword );
+	} catch ( \Throwable $exception ) {
+		utm_builder_log( 'Edit error: ' . $exception->getMessage(), 'error' );
+	}
+
+	return $result;
+}
+
+/**
+ * Remove metadata when a link is deleted.
+ *
+ * @param string $keyword Short URL keyword.
+ * @param int    $deleted Number of affected rows.
+ *
+ * @return void
+ */
+function utm_builder_handle_delete( $args ) {
+	$args = is_array( $args ) ? $args : array( $args );
+	$keyword = $args[0] ?? '';
+	$deleted = $args[1] ?? 0;
+
+	if ( is_array( $keyword ) ) {
+		$keyword = reset( $keyword );
+	}
+
+	if ( $deleted > 0 && '' !== $keyword ) {
+		try {
+			utm_builder_log(
+				array(
+					'action'  => 'delete',
+					'keyword' => $keyword,
+					'deleted' => $deleted,
+				),
+				'delete_start'
+			);
+			utm_builder_delete_meta( $keyword );
+		} catch ( \Throwable $exception ) {
+			utm_builder_log( 'Delete error: ' . $exception->getMessage(), 'error' );
+		}
+	}
+}
+
+/**
+ * Retrieve the current request payload for metadata operations.
+ *
+ * @return array
+ */
+function utm_builder_get_meta_payload_from_request() {
+	static $payload = null;
+
+	if ( null !== $payload ) {
+		return $payload;
+	}
+
+	if ( !utm_builder_is_meta_enabled() ) {
+		$payload = array( 'action' => 'skip' );
+		return $payload;
+	}
+
+	if ( !isset( $_REQUEST['utm_builder_meta_enabled'] ) ) {
+		$payload = array( 'action' => 'skip' );
+		return $payload;
+	}
+
+	$is_enabled = $_REQUEST['utm_builder_meta_enabled'] === '1';
+	if ( !$is_enabled ) {
+		$payload = array( 'action' => 'delete' );
+		return $payload;
+	}
+
+	$original = '';
+	if ( isset( $_REQUEST['utm_builder_original_url'] ) ) {
+		$original = yourls_sanitize_url( trim( (string) $_REQUEST['utm_builder_original_url'] ) );
+	}
+
+	$field_keys = array( 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content' );
+	$data       = array(
+		'original_url' => $original,
+		'utm_source'   => '',
+		'utm_medium'   => '',
+		'utm_campaign' => '',
+		'utm_term'     => '',
+		'utm_content'  => '',
+	);
+
+	foreach ( $field_keys as $key ) {
+		$index = 'utm_builder_' . $key;
+		if ( isset( $_REQUEST[ $index ] ) ) {
+			$data[ $key ] = utm_builder_sanitize_meta_value( $_REQUEST[ $index ] );
+		} else {
+			$data[ $key ] = '';
+		}
+	}
+
+	$has_values = ( '' !== $data['original_url'] );
+	if ( !$has_values ) {
+		foreach ( $field_keys as $key ) {
+			if ( '' !== $data[ $key ] ) {
+				$has_values = true;
+				break;
+			}
+		}
+	}
+
+	if ( !$has_values ) {
+		$payload = array( 'action' => 'delete' );
+		return $payload;
+	}
+
+	$payload = array(
+		'action' => 'upsert',
+		'data'   => $data,
+	);
+
+	utm_builder_log(
+		array(
+			'action' => 'payload_ready',
+			'data'   => $payload,
+		),
+		'payload'
+	);
+
+	return $payload;
+}
+
+/**
+ * Apply a metadata payload to the given keyword.
+ *
+ * @param string      $keyword          Target keyword.
+ * @param array       $payload          Metadata payload.
+ * @param string|null $previous_keyword Previous keyword (for edits).
+ *
+ * @return void
+ */
+function utm_builder_apply_meta_payload( $keyword, array $payload, $previous_keyword = null ) {
+	$action          = $payload['action'] ?? 'skip';
+	$sanitized_new   = yourls_sanitize_keyword( $keyword );
+	$sanitized_old   = $previous_keyword ? yourls_sanitize_keyword( $previous_keyword ) : null;
+	$keywords_differ = $sanitized_old && $sanitized_old !== $sanitized_new;
+
+	if ( 'skip' === $action ) {
+		if ( $keywords_differ ) {
+			utm_builder_move_meta_keyword( $sanitized_old, $sanitized_new );
+		}
+		return;
+	}
+
+	if ( 'delete' === $action ) {
+		utm_builder_delete_meta( $sanitized_new );
+		if ( $keywords_differ ) {
+			utm_builder_delete_meta( $sanitized_old );
+		}
+		return;
+	}
+
+	if ( 'upsert' === $action && isset( $payload['data'] ) && is_array( $payload['data'] ) ) {
+		utm_builder_upsert_meta( $sanitized_new, $payload['data'] );
+		if ( $keywords_differ ) {
+			utm_builder_delete_meta( $sanitized_old );
+		}
+	}
+}
+
+/**
+ * Create or update metadata for a keyword.
+ *
+ * @param string $keyword Keyword identifier.
+ * @param array  $data    Metadata values.
+ *
+ * @return void
+ */
+function utm_builder_upsert_meta( $keyword, array $data ) {
+	if ( !utm_builder_can_use_table() && !utm_builder_maybe_install_table() ) {
+		return;
+	}
+
+	$table = utm_builder_get_meta_table();
+	$now   = date( 'Y-m-d H:i:s' );
+
+	$params = array(
+		'keyword'      => $keyword,
+		'original_url' => $data['original_url'] ?? '',
+		'utm_source'   => $data['utm_source'] ?? '',
+		'utm_medium'   => $data['utm_medium'] ?? '',
+		'utm_campaign' => $data['utm_campaign'] ?? '',
+		'utm_term'     => $data['utm_term'] ?? '',
+		'utm_content'  => $data['utm_content'] ?? '',
+		'created_at'   => $now,
+		'updated_at'   => $now,
+	);
+
+	try {
+		$db        = yourls_get_db();
+		$meta_id   = $db->fetchValue( "SELECT `meta_id` FROM `$table` WHERE `keyword` = :keyword", array( 'keyword' => $keyword ) );
+		if ( $meta_id ) {
+			unset( $params['created_at'] );
+			$db->fetchAffected(
+				"UPDATE `$table`
+				SET `original_url` = :original_url,
+					`utm_source` = :utm_source,
+					`utm_medium` = :utm_medium,
+					`utm_campaign` = :utm_campaign,
+					`utm_term` = :utm_term,
+					`utm_content` = :utm_content,
+					`updated_at` = :updated_at
+				WHERE `keyword` = :keyword",
+				$params
+			);
+		} else {
+			$db->fetchAffected(
+				"INSERT INTO `$table`
+					(`keyword`, `original_url`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `created_at`, `updated_at`)
+				VALUES
+					(:keyword, :original_url, :utm_source, :utm_medium, :utm_campaign, :utm_term, :utm_content, :created_at, :updated_at)",
+				$params
+			);
+		}
+	} catch ( \Exception $exception ) {
+		if ( function_exists( 'yourls_debug' ) ) {
+			yourls_debug( 'UTM Builder meta save error: ' . $exception->getMessage() );
+		}
+	}
+}
+
+/**
+ * Delete metadata for a keyword.
+ *
+ * @param string $keyword Keyword identifier.
+ *
+ * @return void
+ */
+function utm_builder_delete_meta( $keyword ) {
+	if ( !utm_builder_can_use_table() ) {
+		return;
+	}
+
+	$table = utm_builder_get_meta_table();
+
+	try {
+		yourls_get_db()->fetchAffected(
+			"DELETE FROM `$table` WHERE `keyword` = :keyword",
+			array( 'keyword' => yourls_sanitize_keyword( $keyword ) )
+		);
+	} catch ( \Exception $exception ) {
+		if ( function_exists( 'yourls_debug' ) ) {
+			yourls_debug( 'UTM Builder meta delete error: ' . $exception->getMessage() );
+		}
+	}
+}
+
+/**
+ * Move metadata from one keyword to another.
+ *
+ * @param string $from Source keyword.
+ * @param string $to   Target keyword.
+ *
+ * @return void
+ */
+function utm_builder_move_meta_keyword( $from, $to ) {
+	if ( !utm_builder_can_use_table() ) {
+		return;
+	}
+
+	$from = yourls_sanitize_keyword( $from );
+	$to   = yourls_sanitize_keyword( $to );
+
+	if ( $from === $to ) {
+		return;
+	}
+
+	$table = utm_builder_get_meta_table();
+	$now   = date( 'Y-m-d H:i:s' );
+	$db    = yourls_get_db();
+
+	try {
+		$db->fetchAffected(
+			"DELETE FROM `$table` WHERE `keyword` = :keyword",
+			array( 'keyword' => $to )
+		);
+
+		$db->fetchAffected(
+			"UPDATE `$table`
+			SET `keyword` = :new_keyword,
+				`updated_at` = :updated_at
+			WHERE `keyword` = :old_keyword",
+			array(
+				'new_keyword' => $to,
+				'old_keyword' => $from,
+				'updated_at'  => $now,
+			)
+		);
+	} catch ( \Exception $exception ) {
+		if ( function_exists( 'yourls_debug' ) ) {
+			yourls_debug( 'UTM Builder meta move error: ' . $exception->getMessage() );
+		}
+	}
+}
+
+/**
+ * Sanitize individual metadata values.
+ *
+ * @param string $value Raw value.
+ *
+ * @return string
+ */
+function utm_builder_sanitize_meta_value( $value ) {
+	$clean = yourls_sanitize_title( (string) $value );
+
+	if ( '' === $clean ) {
+		return '';
+	}
+
+	if ( strlen( $clean ) > 255 ) {
+		$clean = substr( $clean, 0, 255 );
+	}
+
+	return $clean;
+}
