@@ -795,38 +795,65 @@ function utm_builder_customize_edit_row( $html, $keyword, $url, $title ) {
 	$safe_original = yourls_esc_attr( $original_url );
 
 	$original_label = yourls__( 'Original URL' );
-	$original_block = '<br/><strong>' . yourls_esc_html( $original_label ) . '</strong>:<br/><input type="text" id="edit-original-' . $row_id . '" name="edit-original-' . $row_id . '" value="' . $safe_original . '" class="text utm-edit-full utm-builder-original-input" />';
+	$long_label  = yourls__( 'Long URL' );
+	$title_label = yourls__( 'Title' );
 
-	$pattern = '/(<input\s+type="text"\s+id="edit-url-' . preg_quote( $row_id, '/' ) . '"[^>]*\/>)/';
-	$html    = preg_replace( $pattern, '$1' . $original_block, $html, 1 );
+	$extract_input_attributes = static function( $block ) {
+		if ( preg_match( '/<input\s+([^>]*)\/>/', $block, $attr_matches ) ) {
+			return $attr_matches[1];
+		}
+		return '';
+	};
 
-	$html = preg_replace(
-		'/(<strong>' . preg_quote( yourls__( 'Long URL' ), '/' ) . '<\/strong>):\s*<input\s+type="text"\s+id="edit-url-' . preg_quote( $row_id, '/' ) . '/',
-		'$1:<br/><input type="text" id="edit-url-' . $row_id,
-		$html,
-		1
-	);
+	$sanitize_attributes = static function( $attributes ) {
+		$clean = preg_replace( '/\s*class="[^"]*"/i', '', $attributes );
+		$clean = trim( preg_replace( '/\s+/', ' ', (string) $clean ) );
+		return $clean;
+	};
 
-	$html = preg_replace(
-		'/(<strong>' . preg_quote( yourls__( 'Title' ), '/' ) . '<\/strong>):\s*<input\s+type="text"\s+id="edit-title-' . preg_quote( $row_id, '/' ) . '/',
-		'$1:<br/><input type="text" id="edit-title-' . $row_id,
-		$html,
-		1
-	);
+	$build_block = static function( $label, $attributes ) {
+		$attrs = $attributes !== '' ? $attributes . ' ' : '';
+		return '<div class="utm-edit-block"><strong>' . yourls_esc_html( $label ) . '</strong><br/><input ' . $attrs . 'class="text utm-edit-full" /></div>';
+	};
 
-	$html = preg_replace(
-		'/(id="edit-url-' . preg_quote( $row_id, '/' ) . '"[^>]*class="text)([^"]*)"/',
-		'$1 utm-edit-full$2"',
-		$html,
-		1
-	);
+	$long_pattern  = '/<strong>' . preg_quote( $long_label, '/' ) . '<\/strong>:\s*<input[^>]*id="edit-url-' . preg_quote( $row_id, '/' ) . '"[^>]*\/>/';
+	$title_pattern = '/<strong>' . preg_quote( $title_label, '/' ) . '<\/strong>:\s*<input[^>]*id="edit-title-' . preg_quote( $row_id, '/' ) . '"[^>]*\/>/';
 
-	$html = preg_replace(
-		'/(id="edit-title-' . preg_quote( $row_id, '/' ) . '"[^>]*class="text)([^"]*)"/',
-		'$1 utm-edit-full$2"',
-		$html,
-		1
-	);
+	$long_block  = null;
+	$title_block = null;
+
+	if ( preg_match( $long_pattern, $html, $match ) ) {
+		$long_block = $match[0];
+		$html       = str_replace( $long_block, '', $html );
+	}
+
+	if ( preg_match( $title_pattern, $html, $match_title ) ) {
+		$title_block = $match_title[0];
+		$html        = str_replace( $title_block, '', $html );
+	}
+
+	if ( !$long_block ) {
+		return $html;
+	}
+
+	$long_attrs  = $sanitize_attributes( $extract_input_attributes( $long_block ) );
+	$title_attrs = $title_block ? $sanitize_attributes( $extract_input_attributes( $title_block ) ) : '';
+
+	$title_html = '';
+	if ( $title_block ) {
+		$title_html = $build_block( $title_label, $title_attrs );
+	}
+	$long_html      = $build_block( $long_label, $long_attrs );
+	$original_block = '<div class="utm-edit-block"><strong>' . yourls_esc_html( $original_label ) . '</strong><br/><input type="text" id="edit-original-' . $row_id . '" name="edit-original-' . $row_id . '" value="' . $safe_original . '" class="text utm-edit-full utm-builder-original-input" /></div>';
+
+	$new_blocks = $title_html . $long_html . $original_block;
+
+	$short_marker = '<strong>' . yourls__( 'Short URL' ) . '</strong>:';
+	if ( false !== strpos( $html, $short_marker ) ) {
+		$html = str_replace( $short_marker, $new_blocks . $short_marker, $html );
+	} else {
+		$html .= $new_blocks;
+	}
 
 	return $html;
 }
