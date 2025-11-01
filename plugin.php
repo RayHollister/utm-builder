@@ -95,9 +95,10 @@ function utm_builder_bootstrap() {
 
 	yourls_register_plugin_page( 'utm_builder_settings', 'UTM Builder Settings', 'utm_builder_render_settings_page' );
 
-yourls_add_action( 'insert_link', 'utm_builder_handle_insert', 20, 1 );
-yourls_add_filter( 'edit_link', 'utm_builder_handle_edit', 20, 7 );
-yourls_add_action( 'delete_link', 'utm_builder_handle_delete', 20, 1 );
+	yourls_add_action( 'insert_link', 'utm_builder_handle_insert', 20, 1 );
+	yourls_add_filter( 'edit_link', 'utm_builder_handle_edit', 20, 7 );
+	yourls_add_action( 'delete_link', 'utm_builder_handle_delete', 20, 1 );
+	yourls_add_filter( 'table_edit_row', 'utm_builder_customize_edit_row', 20, 4 );
 
 	if ( utm_builder_is_meta_enabled() ) {
 		utm_builder_maybe_install_table();
@@ -593,6 +594,108 @@ function utm_builder_delete_meta( $keyword ) {
 }
 
 /**
+ * Retrieve metadata row for a keyword.
+ *
+ * @param string $keyword Keyword identifier.
+ *
+ * @return array|null
+ */
+function utm_builder_get_meta_for_keyword( $keyword ) {
+	$keyword = yourls_sanitize_keyword( $keyword );
+	if ( '' === $keyword ) {
+		return null;
+	}
+
+	if ( !utm_builder_is_meta_enabled() && !utm_builder_can_use_table() ) {
+		return null;
+	}
+
+	if ( !utm_builder_can_use_table() && !utm_builder_maybe_install_table() ) {
+		return null;
+	}
+
+	$table = utm_builder_get_meta_table();
+
+	try {
+		$row = yourls_get_db()->fetchObject(
+			"SELECT * FROM `$table` WHERE `keyword` = :keyword LIMIT 1",
+			array( 'keyword' => $keyword )
+		);
+
+		if ( $row ) {
+			return (array) $row;
+		}
+	} catch ( \Exception $exception ) {
+		utm_builder_log( 'Fetch meta error: ' . $exception->getMessage(), 'error' );
+	}
+
+	return null;
+}
+
+/**
+ * Remove UTM parameters from a URL string.
+ *
+ * @param string $url URL to cleanse.
+ *
+ * @return string
+ */
+function utm_builder_strip_utm_params_from_url( $url ) {
+	if ( !is_string( $url ) || '' === $url ) {
+		return $url;
+	}
+
+	$parts = parse_url( $url );
+	if ( empty( $parts['query'] ) ) {
+		return $url;
+	}
+
+	parse_str( $parts['query'], $query );
+	$changed = false;
+
+	foreach ( array_keys( $query ) as $key ) {
+		if ( strpos( strtolower( $key ), 'utm_' ) === 0 ) {
+			unset( $query[ $key ] );
+			$changed = true;
+		}
+	}
+
+	if ( !$changed ) {
+		return $url;
+	}
+
+	$parts['query'] = http_build_query( $query );
+
+	$rebuilt = '';
+	if ( isset( $parts['scheme'] ) ) {
+		$rebuilt .= $parts['scheme'] . '://';
+	}
+	if ( isset( $parts['user'] ) ) {
+		$rebuilt .= $parts['user'];
+		if ( isset( $parts['pass'] ) ) {
+			$rebuilt .= ':' . $parts['pass'];
+		}
+		$rebuilt .= '@';
+	}
+	if ( isset( $parts['host'] ) ) {
+		$rebuilt .= $parts['host'];
+	}
+	if ( isset( $parts['port'] ) ) {
+		$rebuilt .= ':' . $parts['port'];
+	}
+	if ( isset( $parts['path'] ) ) {
+		$rebuilt .= $parts['path'];
+	}
+	if ( !empty( $parts['query'] ) ) {
+		$rebuilt .= '?' . $parts['query'];
+	}
+	if ( isset( $parts['fragment'] ) ) {
+		$rebuilt .= '#' . $parts['fragment'];
+	}
+
+	return $rebuilt;
+}
+
+/**
  * Move metadata from one keyword to another.
  *
  * @param string $from Source keyword.
@@ -659,4 +762,71 @@ function utm_builder_sanitize_meta_value( $value ) {
 	}
 
 	return $clean;
+}
+
+/**
+ * Append the original URL field and adjust edit row inputs.
+ *
+ * @param string $html   Existing HTML.
+ * @param string $keyword Keyword.
+ * @param string $url     Long URL.
+ * @param string $title   Title.
+ *
+ * @return string
+ */
+function utm_builder_customize_edit_row( $html, $keyword, $url, $title ) {
+	if ( false === strpos( $html, 'id="edit-url-' ) ) {
+		return $html;
+	}
+
+	if ( preg_match( '/id="edit-original-/', $html ) ) {
+		return $html;
+	}
+
+	if ( !preg_match( '/id="edit-url-([^"]+)"/', $html, $matches ) ) {
+		return $html;
+	}
+
+	$row_id = $matches[1];
+
+	$meta          = utm_builder_get_meta_for_keyword( $keyword );
+	$original_url  = $meta['original_url'] ?? '';
+	$original_url  = $original_url !== '' ? $original_url : utm_builder_strip_utm_params_from_url( $url );
+	$safe_original = yourls_esc_attr( $original_url );
+
+	$original_label = yourls__( 'Original URL' );
+	$original_block = '<br/><strong>' . yourls_esc_html( $original_label ) . '</strong>:<br/><input type="text" id="edit-original-' . $row_id . '" name="edit-original-' . $row_id . '" value="' . $safe_original . '" class="text utm-edit-full utm-builder-original-input" />';
+
+	$pattern = '/(<input\s+type="text"\s+id="edit-url-' . preg_quote( $row_id, '/' ) . '"[^>]*\/>)/';
+	$html    = preg_replace( $pattern, '$1' . $original_block, $html, 1 );
+
+	$html = preg_replace(
+		'/(<strong>' . preg_quote( yourls__( 'Long URL' ), '/' ) . '<\/strong>):\s*<input\s+type="text"\s+id="edit-url-' . preg_quote( $row_id, '/' ) . '/',
+		'$1:<br/><input type="text" id="edit-url-' . $row_id,
+		$html,
+		1
+	);
+
+	$html = preg_replace(
+		'/(<strong>' . preg_quote( yourls__( 'Title' ), '/' ) . '<\/strong>):\s*<input\s+type="text"\s+id="edit-title-' . preg_quote( $row_id, '/' ) . '/',
+		'$1:<br/><input type="text" id="edit-title-' . $row_id,
+		$html,
+		1
+	);
+
+	$html = preg_replace(
+		'/(id="edit-url-' . preg_quote( $row_id, '/' ) . '"[^>]*class="text)([^"]*)"/',
+		'$1 utm-edit-full$2"',
+		$html,
+		1
+	);
+
+	$html = preg_replace(
+		'/(id="edit-title-' . preg_quote( $row_id, '/' ) . '"[^>]*class="text)([^"]*)"/',
+		'$1 utm-edit-full$2"',
+		$html,
+		1
+	);
+
+	return $html;
 }

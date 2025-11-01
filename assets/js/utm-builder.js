@@ -155,7 +155,7 @@
 	 *
 	 * @return {Object|null} Form instance or null on failure.
 	 */
-	function createFormInstance( { container, prefix, urlInput, context } ) {
+	function createFormInstance( { container, prefix, urlInput, context, originalInput } ) {
 		const $host = container instanceof $ ? container : $( container );
 		if ( !$host.length ) {
 			return null;
@@ -228,12 +228,52 @@
 			fields: $fields,
 			help: $help,
 			urlSelector: urlInput,
+			originalSelector: originalInput,
 			metaPayload: createMetaPayload( false ),
 			isEnabled() {
 				return $wrapper.attr( 'data-enabled' ) === '1';
 			},
 			getUrlInput() {
 				return $( this.urlSelector );
+			},
+			getOriginalInput() {
+				if ( !this.originalSelector ) {
+					return $();
+				}
+				return $( this.originalSelector );
+			},
+			setOriginalValue( value ) {
+				const $original = this.getOriginalInput();
+				if ( !$original.length ) {
+					return;
+				}
+				$original.val( value || '' );
+			},
+			extractBaseUrl() {
+				const $urlInput = this.getUrlInput();
+				if ( !$urlInput.length ) {
+					return '';
+				}
+				const raw = trimValue( $urlInput.val() );
+				if ( !raw ) {
+					return '';
+				}
+				return stripUtmParams( raw ) || raw;
+			},
+			syncMetaFromOriginal( values ) {
+				const utmValues = values || this.getValues();
+				const $original = this.getOriginalInput();
+				const originalVal = $original.length ? trimValue( $original.val() ) : '';
+				const hasData =
+					originalVal !== '' ||
+					Object.values( utmValues ).some( item => trimValue( item ) !== '' );
+
+				if ( hasData ) {
+					const base = originalVal || this.extractBaseUrl();
+					this.metaPayload = createMetaPayload( true, base, utmValues );
+				} else {
+					this.metaPayload = createMetaPayload( false );
+				}
 			},
 			setEnabled( enabled, options ) {
 				const opts = options || {};
@@ -255,7 +295,14 @@
 					$toggle.text( 'Hide UTM Builder' );
 					if ( !skipPrefill ) {
 						this.syncFromUrl();
+						if ( trimValue( ( this.getOriginalInput().val() || '' ) ) === '' ) {
+							const inferredBase = this.extractBaseUrl();
+							if ( inferredBase ) {
+								this.setOriginalValue( inferredBase );
+							}
+						}
 					}
+					this.syncMetaFromOriginal( this.getValues() );
 
 					if ( silent ) {
 						$fields.stop( true, true ).css( 'display', 'flex' );
@@ -307,6 +354,7 @@
 						sync();
 					}
 				} );
+				this.syncMetaFromOriginal( data );
 			},
 			clearErrors() {
 				$fields.find( '.utm-builder-field' ).removeClass( 'utm-builder-error' );
@@ -409,6 +457,7 @@
 				}
 
 				$urlInput.val( updatedUrl );
+				this.setOriginalValue( baseUrl );
 				this.metaPayload = createMetaPayload( true, baseUrl, values );
 				return true;
 			},
@@ -427,6 +476,13 @@
 		$toggle.on( 'click', () => {
 			formInstance.setEnabled( !formInstance.isEnabled() );
 		} );
+
+		const $originalInput = formInstance.getOriginalInput();
+		if ( $originalInput.length ) {
+			$originalInput.on( 'input change', () => {
+				formInstance.syncMetaFromOriginal();
+			} );
+		}
 
 		return formInstance;
 	}
@@ -527,6 +583,7 @@
 				container: $cell,
 				prefix: 'utm-builder-edit-' + rowId,
 				urlInput: '#edit-url-' + rowId,
+				originalInput: '#edit-original-' + rowId,
 				context: 'edit',
 			} );
 
@@ -543,6 +600,7 @@
 				if ( hasExisting ) {
 					instance.setValues( existing );
 					instance.setEnabled( true, { silent: true, skipPrefill: true } );
+					instance.syncMetaFromOriginal( existing );
 				}
 			}
 		},

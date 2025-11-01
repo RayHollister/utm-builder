@@ -6,7 +6,7 @@
     padding: 0px;
 }
 
-#new_url .utm-builder-container div {
+.utm-builder-container div {
     padding-top: 4px;
 }
 
@@ -105,8 +105,19 @@
 	display: inline-block;
 }
 
+.edit-row input.utm-edit-full {
+	width: 100%;
+	max-width: 100%;
+	box-sizing: border-box;
+	margin-top: 4px;
+}
+
+.edit-row .utm-builder-original-input {
+	margin-bottom: 6px;
+}
+
 .edit-row .utm-builder-container {
-	/* margin-top: 16px; */
+    margin: 10px 0;
 }
 
 .utm-field-inner {
