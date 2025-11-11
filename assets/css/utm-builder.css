@@ -82,7 +82,7 @@
 	box-sizing: border-box;
 	-webkit-border-radius: 0px;
   border-radius: 0px;
-	border: 1px solid #88c0eb;
+	/* border: 1px solid #88c0eb; */
 }
 
 .utm-builder-required {
@@ -192,6 +192,14 @@
 
 .utm-builder-field .MuiOutlinedInput-root {
 	background-color: #fff;
+}
+
+#new_url .MuiPaper-root {
+    background-color:white;
+}
+
+#new_url .base-Popper-root {
+    background-color:white;
 }
 
 .utm-builder-field .MuiFormHelperText-root {
