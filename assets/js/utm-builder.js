@@ -15,6 +15,433 @@
 		return acc;
 	}, {} );
 
+	const PLUGIN_CONFIG = window.UTM_BUILDER_CONFIG || {};
+	const REACT = window.React || null;
+	const REACT_DOM = window.ReactDOM || null;
+	const MATERIAL_UI = window.MaterialUI || null;
+	const AUTOCOMPLETE_LIMIT = 25;
+	const AUTOCOMPLETE_CACHE = {};
+
+	/**
+	 * Determine if Material UI dependencies are present.
+	 *
+	 * @return {boolean} Whether React + MUI are available.
+	 */
+	function canUseMaterialAutocomplete() {
+		return Boolean(
+			REACT &&
+			REACT_DOM &&
+			MATERIAL_UI &&
+			typeof MATERIAL_UI.Autocomplete !== 'undefined' &&
+			typeof MATERIAL_UI.TextField !== 'undefined'
+		);
+	}
+
+	/**
+	 * Build a fully qualified URL for AJAX requests.
+	 *
+	 * @param {string} base Base URL or path.
+	 * @return {URL|null} Resolved URL instance.
+	 */
+	function getAbsoluteUrl( base ) {
+		if ( !base ) {
+			return null;
+		}
+		try {
+			return new URL( base, window.location.href );
+		} catch ( error ) {
+			return null;
+		}
+	}
+
+	/**
+	 * Fetch autocomplete suggestions for a given field.
+	 *
+	 * @param {string} fieldKey Field identifier.
+	 * @param {string} query    Search fragment.
+	 * @return {Promise<Array>} Promise resolving to suggestions.
+	 */
+	function fetchAutocompleteValues( fieldKey, query ) {
+		const normalizedField = ( fieldKey || '' ).toLowerCase();
+		const normalizedQuery = trimValue( query || '' ).toLowerCase();
+		const cacheKey = normalizedField + '::' + normalizedQuery;
+
+		if ( AUTOCOMPLETE_CACHE[ cacheKey ] ) {
+			return Promise.resolve( AUTOCOMPLETE_CACHE[ cacheKey ] );
+		}
+
+		const ajaxUrl = PLUGIN_CONFIG.ajaxUrl || window.ajaxurl || '';
+		const action = PLUGIN_CONFIG.autocompleteAction || 'utm_builder_autocomplete';
+		const nonce = PLUGIN_CONFIG.autocompleteNonce || '';
+		const endpoint = getAbsoluteUrl( ajaxUrl );
+
+		if ( !endpoint ) {
+			return Promise.resolve( [] );
+		}
+
+		endpoint.searchParams.set( 'action', action );
+		endpoint.searchParams.set( 'field', normalizedField );
+		endpoint.searchParams.set( 'limit', String( AUTOCOMPLETE_LIMIT ) );
+		endpoint.searchParams.set( 'nonce', nonce );
+		if ( normalizedQuery ) {
+			endpoint.searchParams.set( 'search', normalizedQuery );
+		} else {
+			endpoint.searchParams.delete( 'search' );
+		}
+
+		return window
+			.fetch( endpoint.toString(), {
+				method: 'GET',
+				credentials: 'same-origin',
+				headers: {
+					Accept: 'application/json',
+				},
+			} )
+			.then( response => ( response.ok ? response.json() : null ) )
+			.then( data => {
+				if ( data && data.success && Array.isArray( data.values ) ) {
+					AUTOCOMPLETE_CACHE[ cacheKey ] = data.values;
+					return data.values;
+				}
+				return [];
+			} )
+			.catch( () => [] );
+	}
+
+	/**
+	 * React component wrapper for a Material UI Autocomplete input.
+	 *
+	 * @param {Object} options Component options.
+	 * @return {Object|null} Controller for the field.
+	 */
+	function createReactAutocompleteField( options ) {
+		if ( !canUseMaterialAutocomplete() ) {
+			return null;
+		}
+
+		const {
+			mountNode,
+			field,
+			initialValue,
+			onValueChange,
+			onErrorStateChange,
+			fetcher,
+		} = options;
+
+		if ( !mountNode || !field ) {
+			return null;
+		}
+
+		const controller = {
+			setValue: () => {},
+			getValue: () => '',
+			setError: () => {},
+			clearError: () => {},
+			focus: () => {},
+			destroy: () => {},
+		};
+
+		const props = {
+			controller,
+			fieldKey: field.key,
+			label: field.label,
+			required: Boolean( field.required ),
+			initialValue: initialValue || '',
+			onValueChange,
+			onErrorStateChange,
+			fetcher,
+		};
+
+		const root = REACT_DOM.createRoot( mountNode );
+		root.render( REACT.createElement( UTMAutocompleteField, props ) );
+
+		controller.destroy = () => {
+			root.unmount();
+		};
+
+		return controller;
+	}
+
+	/**
+	 * Fallback text input controller when Material UI is unavailable.
+	 *
+	 * @param {Object} options Options bag.
+	 * @return {Object} Controller instance.
+	 */
+	function createFallbackField( options ) {
+		const { mountNode, field, initialValue, onValueChange, onErrorStateChange } = options;
+		if ( !mountNode ) {
+			return null;
+		}
+
+		const $wrapper = $( '<div class="utm-fallback-field"></div>' );
+		const $label = $( '<label></label>' ).text( field.label + ( field.required ? ' *' : '' ) );
+		const $input = $( '<input type="text" class="utm-input utm-fallback-input" />' )
+			.attr( 'placeholder', field.label )
+			.val( initialValue || '' );
+
+		$label.append( $input );
+		$wrapper.append( $label );
+		mountNode.innerHTML = '';
+		mountNode.appendChild( $wrapper[0] );
+
+		const controller = {
+			setValue( value, opts ) {
+				$input.val( value || '' );
+				if ( !( opts && opts.silent ) && typeof onValueChange === 'function' ) {
+					onValueChange( trimValue( $input.val() ) );
+				}
+			},
+			getValue() {
+				return trimValue( $input.val() );
+			},
+			setError( flag ) {
+				const hasError = Boolean( flag );
+				if ( hasError ) {
+					$input.attr( 'aria-invalid', 'true' );
+				} else {
+					$input.removeAttr( 'aria-invalid' );
+				}
+				if ( typeof onErrorStateChange === 'function' ) {
+					onErrorStateChange( hasError );
+				}
+			},
+			clearError() {
+				$input.removeAttr( 'aria-invalid' );
+				if ( typeof onErrorStateChange === 'function' ) {
+					onErrorStateChange( false );
+				}
+			},
+			focus() {
+				$input.trigger( 'focus' );
+			},
+			destroy() {},
+		};
+
+		$input.on( 'input change', () => {
+			controller.clearError();
+			if ( typeof onValueChange === 'function' ) {
+				onValueChange( trimValue( $input.val() ) );
+			}
+		} );
+
+		return controller;
+	}
+
+	/**
+	 * Create an autocomplete field (React when possible, fallback otherwise).
+	 *
+	 * @param {Object} options Field options.
+	 * @return {Object|null} Field controller.
+	 */
+	function createAutocompleteField( options ) {
+		const controller =
+			createReactAutocompleteField( options ) ||
+			createFallbackField( options );
+		return controller;
+	}
+
+	/**
+	 * Material UI Autocomplete component for a single UTM field.
+	 *
+	 * @param {Object} props Component props.
+	 * @return {React.ReactElement}
+	 */
+	function UTMAutocompleteField( props ) {
+		const {
+			controller,
+			fieldKey,
+			label,
+			required,
+			initialValue,
+			onValueChange,
+			onErrorStateChange,
+			fetcher,
+		} = props;
+
+		const { Autocomplete, TextField, CircularProgress } = MATERIAL_UI;
+
+		const [ value, setValue ] = REACT.useState( trimValue( initialValue || '' ) );
+		const [ inputValue, setInputValue ] = REACT.useState( trimValue( initialValue || '' ) );
+		const [ options, setOptions ] = REACT.useState( [] );
+		const [ loading, setLoading ] = REACT.useState( false );
+		const [ hasError, setHasError ] = REACT.useState( false );
+		const inputRef = REACT.useRef( null );
+		const latestValueRef = REACT.useRef( value );
+		const lastQueryRef = REACT.useRef( null );
+		const fetchIdRef = REACT.useRef( 0 );
+
+		const updateErrorState = REACT.useCallback(
+			flag => {
+				const next = Boolean( flag );
+				setHasError( next );
+				if ( typeof onErrorStateChange === 'function' ) {
+					onErrorStateChange( next );
+				}
+			},
+			[ onErrorStateChange ]
+		);
+
+		REACT.useEffect( () => {
+			latestValueRef.current = value;
+		}, [ value ] );
+
+		const emitChange = REACT.useCallback(
+			newValue => {
+				const normalized = trimValue( newValue || '' );
+				setValue( normalized );
+				setInputValue( normalized );
+				latestValueRef.current = normalized;
+				updateErrorState( false );
+				if ( typeof onValueChange === 'function' ) {
+					onValueChange( normalized, fieldKey );
+				}
+			},
+			[ fieldKey, onValueChange, updateErrorState ]
+		);
+
+		const handleInputChange = REACT.useCallback(
+			( event, newInputValue ) => {
+				setInputValue( newInputValue || '' );
+				updateErrorState( false );
+			},
+			[ updateErrorState ]
+		);
+
+		const handleBlur = REACT.useCallback( () => {
+			emitChange( inputValue );
+		}, [ emitChange, inputValue ] );
+
+		const handleChange = REACT.useCallback(
+			( event, newValue ) => {
+				if ( typeof newValue === 'string' ) {
+					emitChange( newValue );
+				} else if ( newValue && typeof newValue === 'object' && Object.prototype.hasOwnProperty.call( newValue, 'inputValue' ) ) {
+					emitChange( newValue.inputValue );
+				} else {
+					emitChange( '' );
+				}
+			},
+			[ emitChange ]
+		);
+
+		const loadOptions = REACT.useCallback(
+			query => {
+				if ( typeof fetcher !== 'function' ) {
+					setOptions( [] );
+					return;
+				}
+
+				const currentId = ++fetchIdRef.current;
+				setLoading( true );
+
+				Promise.resolve( fetcher( query || '' ) )
+					.then( values => {
+						if ( fetchIdRef.current === currentId ) {
+							setOptions( Array.isArray( values ) ? values : [] );
+						}
+					} )
+					.catch( () => {
+						if ( fetchIdRef.current === currentId ) {
+							setOptions( [] );
+						}
+					} )
+					.finally( () => {
+						if ( fetchIdRef.current === currentId ) {
+							setLoading( false );
+						}
+					} );
+			},
+			[ fetcher ]
+		);
+
+		REACT.useEffect( () => {
+			lastQueryRef.current = '';
+			loadOptions( '' );
+		}, [ loadOptions ] );
+
+		REACT.useEffect( () => {
+			const query = trimValue( inputValue || '' ).toLowerCase();
+			if ( query === lastQueryRef.current ) {
+				return () => {};
+			}
+			const timer = window.setTimeout( () => {
+				lastQueryRef.current = query;
+				loadOptions( query );
+			}, 250 );
+			return () => window.clearTimeout( timer );
+		}, [ inputValue, loadOptions ] );
+
+		REACT.useEffect( () => {
+			if ( controller ) {
+				controller.setValue = ( newValue, opts ) => {
+					const normalized = trimValue( newValue || '' );
+					if ( opts && opts.silent ) {
+						setValue( normalized );
+						setInputValue( normalized );
+						latestValueRef.current = normalized;
+						updateErrorState( false );
+					} else {
+						emitChange( normalized );
+					}
+				};
+				controller.getValue = () => latestValueRef.current;
+				controller.setError = flag => {
+					updateErrorState( flag );
+				};
+				controller.clearError = () => {
+					updateErrorState( false );
+				};
+				controller.focus = () => {
+					if ( inputRef.current ) {
+						inputRef.current.focus();
+					}
+				};
+			}
+		}, [ controller, emitChange, updateErrorState ] );
+
+		return REACT.createElement(
+			Autocomplete,
+			{
+				freeSolo: true,
+				options,
+				value,
+				inputValue,
+				onInputChange: handleInputChange,
+				onChange: handleChange,
+				onBlur: handleBlur,
+				loading,
+				selectOnFocus: true,
+				clearOnBlur: false,
+				handleHomeEndKeys: true,
+				disablePortal: true,
+				renderInput: params =>
+					REACT.createElement(
+						TextField,
+						Object.assign( {}, params, {
+							label: label,
+							required,
+							variant: 'outlined',
+							size: 'small',
+							error: hasError,
+							helperText: hasError ? 'This field is required' : ' ',
+							inputRef,
+							InputProps: Object.assign( {}, params.InputProps, {
+								endAdornment: REACT.createElement(
+									REACT.Fragment,
+									null,
+									loading
+										? REACT.createElement( CircularProgress, { color: 'inherit', size: 16 } )
+										: null,
+									params.InputProps.endAdornment
+								),
+							} ),
+						} )
+					),
+			}
+		);
+	}
+
 	/**
 	 * Trim helper.
 	 *
@@ -166,57 +593,6 @@
 		const $fields  = $( '<div class="utm-builder-fields" aria-hidden="true"></div>' );
 		const $help    = $( '<div class="utm-builder-help" aria-hidden="true">Source, Medium and Campaign are required. Term and Content are optional.</div>' );
 
-		const initFloatingState = ( $input, $inner ) => {
-			const syncState = () => {
-				const hasValue = trimValue( $input.val() ) !== '';
-				if ( hasValue ) {
-					$inner.addClass( 'is-active' );
-				} else if ( !$inner.hasClass( 'is-focused' ) ) {
-					$inner.removeClass( 'is-active' );
-				}
-			};
-
-			$input.on( 'focus', () => {
-				$inner.addClass( 'is-focused is-active' );
-			} );
-
-			$input.on( 'blur', () => {
-				$inner.removeClass( 'is-focused' );
-				syncState();
-			} );
-
-			$input.on( 'input change', syncState );
-
-			syncState();
-			$input.data( 'utmFloatingSync', syncState );
-		};
-
-
-		FIELD_DEFS.forEach( field => {
-			const inputId = prefix + '-' + field.key;
-			const $fieldWrapper = $( '<div class="utm-builder-field"></div>' );
-			const $inner = $( '<div class="utm-field-inner"></div>' );
-			const $input = $( '<input type="text" autocomplete="off" class="utm-input" />' );
-			const $label = $( '<label class="utm-floating-label"></label>' );
-
-			$label.attr( 'for', inputId ).text( field.label );
-			if ( field.required ) {
-				const $required = $( '<span class="utm-builder-required" aria-hidden="true">*</span>' );
-				$label.append( $required );
-			}
-
-			$input
-				.attr( 'id', inputId )
-				.attr( 'data-utm-field', field.key )
-				.attr( 'placeholder', ' ' );
-
-			$inner.append( $input ).append( $label );
-			$fieldWrapper.append( $inner );
-			$fields.append( $fieldWrapper );
-
-			initFloatingState( $input, $inner );
-		} );
-
 		$wrapper.append( $toggle ).append( $fields ).append( $help );
 		$host.append( $wrapper );
 
@@ -229,7 +605,18 @@
 			help: $help,
 			urlSelector: urlInput,
 			originalSelector: originalInput,
+			fieldControllers: {},
+			fieldWrappers: {},
+			fieldValues: {},
 			metaPayload: createMetaPayload( false ),
+			handleFieldValueChange( key, value ) {
+				this.fieldValues[ key ] = trimValue( value );
+				this.clearFieldError( key );
+				this.syncMetaFromOriginal();
+			},
+			requestAutocompleteValues( fieldKey, query ) {
+				return fetchAutocompleteValues( fieldKey, query );
+			},
 			isEnabled() {
 				return $wrapper.attr( 'data-enabled' ) === '1';
 			},
@@ -331,12 +718,7 @@
 				}
 			},
 			getValues() {
-				const values = {};
-				$fields.find( 'input[data-utm-field]' ).each( function () {
-					const $input = $( this );
-					values[ $input.data( 'utmField' ) ] = trimValue( $input.val() );
-				} );
-				return values;
+				return Object.assign( {}, this.fieldValues );
 			},
 			getMetaRequestParams() {
 				const payload = this.metaPayload || createMetaPayload( false );
@@ -344,28 +726,43 @@
 			},
 			setValues( values ) {
 				const data = values || {};
-				$fields.find( 'input[data-utm-field]' ).each( function () {
-					const $input = $( this );
-					const key = $input.data( 'utmField' );
+				Object.keys( this.fieldControllers ).forEach( key => {
+					const controller = this.fieldControllers[ key ];
 					const value = data[ key ] || '';
-					$input.val( value );
-					const sync = $input.data( 'utmFloatingSync' );
-					if ( typeof sync === 'function' ) {
-						sync();
+					this.fieldValues[ key ] = value;
+					if ( controller && typeof controller.setValue === 'function' ) {
+						controller.setValue( value, { silent: true } );
 					}
+					this.clearFieldError( key );
 				} );
 				this.syncMetaFromOriginal( data );
 			},
 			clearErrors() {
-				$fields.find( '.utm-builder-field' ).removeClass( 'utm-builder-error' );
-				$fields.find( 'input[data-utm-field]' ).removeAttr( 'aria-invalid' );
+				Object.keys( this.fieldWrappers ).forEach( key => {
+					this.clearFieldError( key );
+				} );
+			},
+			clearFieldError( key ) {
+				const wrapper = this.fieldWrappers[ key ];
+				if ( wrapper ) {
+					wrapper.removeClass( 'utm-builder-error' );
+				}
+				const controller = this.fieldControllers[ key ];
+				if ( controller && typeof controller.clearError === 'function' ) {
+					controller.clearError();
+				}
 			},
 			markMissing( missingKeys ) {
 				this.clearErrors();
 				missingKeys.forEach( key => {
-					const $input = $fields.find( 'input[data-utm-field="' + key + '"]' );
-					$input.attr( 'aria-invalid', 'true' );
-					$input.closest( '.utm-builder-field' ).addClass( 'utm-builder-error' );
+					const controller = this.fieldControllers[ key ];
+					if ( controller && typeof controller.setError === 'function' ) {
+						controller.setError( true );
+					}
+					const wrapper = this.fieldWrappers[ key ];
+					if ( wrapper ) {
+						wrapper.addClass( 'utm-builder-error' );
+					}
 				} );
 			},
 			syncFromUrl() {
@@ -440,9 +837,9 @@
 					const labelList = missing.map( key => FIELD_LABEL_MAP[ key ] || key ).join( ', ' );
 					showError( 'Please fill in required UTM fields: ' + labelList );
 					const firstMissing = missing[ 0 ];
-					const $firstInput = this.fields.find( 'input[data-utm-field="' + firstMissing + '"]' );
-					if ( $firstInput.length ) {
-						$firstInput.focus();
+					const controller = this.fieldControllers[ firstMissing ];
+					if ( controller && typeof controller.focus === 'function' ) {
+						controller.focus();
 					}
 					this.metaPayload = createMetaPayload( false );
 					return false;
@@ -462,14 +859,31 @@
 				return true;
 			},
 		};
+		FIELD_DEFS.forEach( field => {
+			const $fieldWrapper = $( '<div class="utm-builder-field" data-utm-field-wrapper="' + field.key + '"></div>' );
+			const mountNode = document.createElement( 'div' );
+			mountNode.className = 'utm-field-mount';
+			$fieldWrapper.append( mountNode );
+			$fields.append( $fieldWrapper );
 
-		$fields.on( 'input change', 'input[data-utm-field]', function () {
-			const $input = $( this );
-			$input.removeAttr( 'aria-invalid' );
-			$input.closest( '.utm-builder-field' ).removeClass( 'utm-builder-error' );
-			const sync = $input.data( 'utmFloatingSync' );
-			if ( typeof sync === 'function' ) {
-				sync();
+			formInstance.fieldWrappers[ field.key ] = $fieldWrapper;
+			formInstance.fieldValues[ field.key ] = '';
+
+			const controller = createAutocompleteField( {
+				mountNode,
+				field,
+				initialValue: '',
+				onValueChange: value => {
+					formInstance.handleFieldValueChange( field.key, value );
+				},
+				onErrorStateChange: state => {
+					$fieldWrapper.toggleClass( 'utm-builder-error', Boolean( state ) );
+				},
+				fetcher: query => formInstance.requestAutocompleteValues( field.key, query ),
+			} );
+
+			if ( controller ) {
+				formInstance.fieldControllers[ field.key ] = controller;
 			}
 		} );
 

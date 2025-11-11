@@ -3,7 +3,7 @@
 Plugin Name: UTM Builder for YOURLS
 Plugin URI: https://github.com/rayhollister/utm-builder
 Description: Adds a guided UTM builder to the YOURLS admin interface.
-Version: 1.1.0
+Version: 1.2.0
 Author: Ray Hollister
 Author URI: https://rayhollister.com/
 */
@@ -14,6 +14,7 @@ if ( !defined( 'YOURLS_ABSPATH' ) ) {
 }
 
 define( 'UTM_BUILDER_PLUGIN_BASENAME', yourls_plugin_basename( __FILE__ ) );
+define( 'UTM_BUILDER_VERSION', '1.2.0' );
 define( 'UTM_BUILDER_OPTION_SAVE_META', 'utm_builder_save_meta' );
 define( 'UTM_BUILDER_OPTION_DB_VERSION', 'utm_builder_meta_db_version' );
 define( 'UTM_BUILDER_DB_VERSION', '1.0.0' );
@@ -22,6 +23,7 @@ define( 'UTM_BUILDER_LOG_FILE', YOURLS_USERDIR . '/utm-builder-debug.log' );
 
 yourls_add_action( 'activated_' . UTM_BUILDER_PLUGIN_BASENAME, 'utm_builder_activate' );
 yourls_add_action( 'plugins_loaded', 'utm_builder_bootstrap' );
+yourls_add_action( 'yourls_ajax_utm_builder_autocomplete', 'utm_builder_ajax_autocomplete' );
 
 /**
  * Enqueue plugin assets on the admin index page.
@@ -40,9 +42,23 @@ function utm_builder_enqueue_assets( $context ) {
 	}
 
 	$plugin_url = yourls_plugin_url( __DIR__ );
-	$version    = '1.1.0';
+	$version    = UTM_BUILDER_VERSION;
+
+	$config = array(
+		'ajaxUrl'             => yourls_admin_url( 'admin-ajax.php' ),
+		'autocompleteAction'  => 'utm_builder_autocomplete',
+		'autocompleteNonce'   => yourls_create_nonce( 'utm_builder_autocomplete' ),
+		'fieldKeys'           => utm_builder_get_autocomplete_field_keys(),
+		'pluginVersion'       => $version,
+	);
 
 	echo '<link rel="stylesheet" href="' . $plugin_url . '/assets/css/utm-builder.css?v=' . $version . '" type="text/css" media="all" />' . "\n";
+	echo '<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin="anonymous"></script>' . "\n";
+	echo '<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin="anonymous"></script>' . "\n";
+	echo '<script src="https://unpkg.com/@emotion/react@11.11.4/dist/emotion-react.umd.min.js" crossorigin="anonymous"></script>' . "\n";
+	echo '<script src="https://unpkg.com/@emotion/styled@11.11.0/dist/emotion-styled.umd.min.js" crossorigin="anonymous"></script>' . "\n";
+	echo '<script src="https://unpkg.com/@mui/material@5.15.14/umd/material-ui.production.min.js" crossorigin="anonymous"></script>' . "\n";
+	echo '<script>window.UTM_BUILDER_CONFIG = ' . json_encode( $config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP ) . ';</script>' . "\n";
 	echo '<script src="' . $plugin_url . '/assets/js/utm-builder.js?v=' . $version . '"></script>' . "\n";
 }
 
@@ -856,4 +872,139 @@ function utm_builder_customize_edit_row( $html, $keyword, $url, $title ) {
 	}
 
 	return $html;
+}
+
+/**
+ * Return the list of UTM field keys that support autocomplete.
+ *
+ * @return array
+ */
+function utm_builder_get_autocomplete_field_keys() {
+	return array(
+		'utm_source',
+		'utm_medium',
+		'utm_campaign',
+		'utm_term',
+		'utm_content',
+	);
+}
+
+/**
+ * Fetch distinct metadata values for a given column.
+ *
+ * @param string $field  Column key.
+ * @param string $search Optional search fragment.
+ * @param int    $limit  Maximum results.
+ *
+ * @return array
+ */
+function utm_builder_fetch_distinct_meta_values( $field, $search = '', $limit = 25 ) {
+	if ( !utm_builder_can_use_table() ) {
+		return array();
+	}
+
+	$field   = strtolower( (string) $field );
+	$allowed = utm_builder_get_autocomplete_field_keys();
+	if ( !in_array( $field, $allowed, true ) ) {
+		return array();
+	}
+
+	$table = utm_builder_get_meta_table();
+	$limit = max( 5, min( 100, (int) $limit ) );
+	$sql   = "SELECT DISTINCT `$field` AS value
+		FROM `$table`
+		WHERE `$field` IS NOT NULL
+		  AND `$field` <> ''";
+	$params = array();
+
+	if ( $search !== '' ) {
+		$sql           .= " AND `$field` LIKE :search";
+		$params['search'] = '%' . $search . '%';
+	}
+
+	$sql .= " ORDER BY `$field` ASC LIMIT $limit";
+
+	try {
+		$values = yourls_get_db()->fetchCol( $sql, $params );
+	} catch ( \Exception $exception ) {
+		utm_builder_log( 'Autocomplete query failed: ' . $exception->getMessage(), 'error' );
+		return array();
+	}
+
+	$values = array_filter(
+		array_map(
+			static function ( $value ) {
+				return is_string( $value ) ? trim( $value ) : '';
+			},
+			$values
+		),
+		static function ( $value ) {
+			return $value !== '';
+		}
+	);
+
+	return array_values( array_unique( $values ) );
+}
+
+/**
+ * Validate a nonce without triggering a hard error response.
+ *
+ * @param string $nonce  Provided nonce.
+ * @param string $action Action key.
+ *
+ * @return bool
+ */
+function utm_builder_is_valid_nonce( $nonce, $action ) {
+	$nonce    = (string) $nonce;
+	$expected = yourls_create_nonce( $action );
+
+	if ( function_exists( 'hash_equals' ) ) {
+		return hash_equals( $expected, $nonce );
+	}
+
+	return $expected === $nonce;
+}
+
+/**
+ * AJAX handler for autocomplete queries.
+ *
+ * @return void
+ */
+function utm_builder_ajax_autocomplete() {
+	$field = isset( $_REQUEST['field'] ) ? strtolower( trim( (string) $_REQUEST['field'] ) ) : '';
+	$search = isset( $_REQUEST['search'] ) ? trim( (string) $_REQUEST['search'] ) : '';
+	$limit  = isset( $_REQUEST['limit'] ) ? (int) $_REQUEST['limit'] : 25;
+	$nonce  = isset( $_REQUEST['nonce'] ) ? (string) $_REQUEST['nonce'] : '';
+
+	$response = array(
+		'success' => false,
+		'field'   => $field,
+		'values'  => array(),
+	);
+
+	if ( !utm_builder_is_valid_nonce( $nonce, 'utm_builder_autocomplete' ) ) {
+		$response['error'] = 'Invalid or expired request.';
+		echo json_encode( $response );
+		return;
+	}
+
+	if ( !in_array( $field, utm_builder_get_autocomplete_field_keys(), true ) ) {
+		$response['error'] = 'Unknown field.';
+		echo json_encode( $response );
+		return;
+	}
+
+	if ( !utm_builder_is_meta_enabled() || !utm_builder_can_use_table() ) {
+		$response['error'] = 'Metadata storage is not available.';
+		echo json_encode( $response );
+		return;
+	}
+
+	$values = utm_builder_fetch_distinct_meta_values( $field, $search, $limit );
+
+	$response['success']  = true;
+	$response['values']   = $values;
+	$response['has_more'] = count( $values ) >= max( 5, min( 100, (int) $limit ) );
+
+	echo json_encode( $response );
 }

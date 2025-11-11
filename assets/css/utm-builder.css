@@ -184,6 +184,24 @@
 	color: #d63638;
 }
 
+.utm-builder-field .utm-field-mount,
+.utm-builder-field .utm-field-mount .MuiAutocomplete-root,
+.utm-builder-field .utm-field-mount .MuiTextField-root {
+	width: 100%;
+}
+
+.utm-builder-field .MuiOutlinedInput-root {
+	background-color: #fff;
+}
+
+.utm-builder-field .MuiFormHelperText-root {
+	min-height: 1.2em;
+}
+
+.utm-builder-field.utm-builder-error .utm-fallback-input {
+	border-color: #d63638;
+}
+
 .edit-row .utm-field-inner.is-active .utm-floating-label {
     top:-12px;
     transform: translateY(0);
